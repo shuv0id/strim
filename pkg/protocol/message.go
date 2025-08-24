@@ -132,13 +132,13 @@ func Deserialize(b []byte) (*Message, error) {
 	pos += 4
 	m.Headers = make(map[string]string)
 
-	for i := 0; i <= int(headersCount); i++ {
+	for i := 0; i < int(headersCount); i++ {
 		if len(b) < pos+4 {
 			return nil, fmt.Errorf("not enough data for header key length")
 		}
 		kLen := binary.BigEndian.Uint32(b[pos : pos+4])
 		pos += 4
-		if len(b) < pos+int(keyLen) {
+		if len(b) < pos+int(kLen) {
 			return nil, fmt.Errorf("not enough data for header key")
 		}
 		key := string(b[pos : pos+int(kLen)])
