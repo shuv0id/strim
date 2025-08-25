@@ -22,19 +22,19 @@ type Segment struct {
 }
 
 func NewSegment(partitionDir string, offset uint64, topic string, partition uint64) (*Segment, error) {
-	logPath := filepath.Join(partitionDir, pad(offset), ".log")
+	logPath := filepath.Join(partitionDir, pad(offset)+".log")
 	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("error opening log file for segment %s-%d-%d: %v", topic, partition, offset, err)
 	}
 
-	indexPath := filepath.Join(partitionDir, pad(offset), ".index")
+	indexPath := filepath.Join(partitionDir, pad(offset)+".index")
 	indexFile, err := os.OpenFile(indexPath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("error opening index file for segment %s-%d-%d: %v", topic, partition, offset, err)
 	}
 
-	timeindexPath := filepath.Join(partitionDir, pad(offset), ".timeindex")
+	timeindexPath := filepath.Join(partitionDir, pad(offset)+".timeindex")
 	timeindexFile, err := os.OpenFile(timeindexPath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("error opening timeindex file for segment %s-%d-%d: %v", topic, partition, offset, err)
