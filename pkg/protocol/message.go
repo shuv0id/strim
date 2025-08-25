@@ -28,7 +28,7 @@ func (m *Message) Validate() error {
 		return fmt.Errorf("message value cannot be empty")
 	}
 
-	if m.Timestamp.Unix() == 0 {
+	if m.Timestamp.IsZero() {
 		return fmt.Errorf("message timestamps is invalid")
 	}
 
