@@ -88,8 +88,8 @@ func (s *Segment) writeMsg(msgBytes []byte) error {
 
 func (s *Segment) appendIndexEntry(offset uint64, pos uint32) error {
 	buf := make([]byte, 8)
-	binary.BigEndian.AppendUint32(buf[0:4], uint32(offset-s.baseOffset))
-	binary.BigEndian.AppendUint32(buf[4:8], pos)
+	binary.BigEndian.PutUint32(buf[0:4], uint32(offset-s.baseOffset))
+	binary.BigEndian.PutUint32(buf[4:8], pos)
 
 	_, err := s.index.Write(buf)
 	if err != nil {
@@ -100,8 +100,8 @@ func (s *Segment) appendIndexEntry(offset uint64, pos uint32) error {
 
 func (s *Segment) appendTimeIndexEntry(t time.Time, relativeOffset uint32) error {
 	buf := make([]byte, 12)
-	binary.BigEndian.AppendUint64(buf[0:8], uint64(t.UnixMilli()))
-	binary.BigEndian.AppendUint32(buf[8:12], relativeOffset)
+	binary.BigEndian.PutUint64(buf[0:8], uint64(t.UnixMilli()))
+	binary.BigEndian.PutUint32(buf[8:12], relativeOffset)
 
 	_, err := s.timeIndex.Write(buf)
 	if err != nil {
