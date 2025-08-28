@@ -1,7 +1,7 @@
 package partition
 
 import (
-	"container/list"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,22 +13,24 @@ import (
 )
 
 type Partition interface {
-	Append(m *protocol.Message) uint64
-	Read(fromOffset uint64, maxMessages int) []*protocol.Message
+	Append(msgs []*protocol.Message) error
+	Read(offset uint64, maxBytes uint64) ([]*protocol.Message, error)
+	GetTopic() string
+	GetLEO() uint64
+	GetHWM() uint64
 }
 
 type LogPartition struct {
 	ID            uint64 // ID with 0 will considered as leader, rest will be followers partition
 	Topic         string
-	Messages      *list.List // In-memory message logs
-	LEO           uint64     // log-end-offset: The offset of the next message to be written in a partition.
-	HWM           uint64     // High Watermark: the highest offset that is safely replicated to all replicas.(leader only; followers will default to 0)
+	LEO           uint64 // log-end-offset: The offset of the next message to be written in a partition.
+	HWM           uint64 // High Watermark: the highest offset that is safely replicated to all replicas.(leader only; followers will default to 0)
 	ActiveSegment *Segment
 	Config        *config.LogConfig
 	mu            sync.RWMutex
 }
 
-func NewPartition(id uint64, topic string) (*LogPartition, error) {
+func NewPartition(id uint64, topic string) (Partition, error) {
 	dir := filepath.Join(topic, "-", strconv.FormatUint(id, 10))
 	if err := os.Mkdir(dir, 0755); err != nil {
 		return nil, err
@@ -44,7 +46,6 @@ func NewPartition(id uint64, topic string) (*LogPartition, error) {
 		Topic:         topic,
 		LEO:           0,
 		HWM:           0,
-		Messages:      list.New(),
 		ActiveSegment: s,
 	}, nil
 }
@@ -80,7 +81,7 @@ func (p *LogPartition) Append(msgs []*protocol.Message) error {
 			return err
 		}
 
-		if err = seg.writeMsg(msgData); err != nil {
+		if err = seg.write(msgData); err != nil {
 			return err
 		}
 		p.LEO++
@@ -104,6 +105,57 @@ func (p *LogPartition) Append(msgs []*protocol.Message) error {
 		}
 	}
 	return nil
+}
+
+func (p *LogPartition) Read(offset uint64, maxBytes uint64) ([]*protocol.Message, error) {
+	pos, err := p.ActiveSegment.findPositionInIndex(offset)
+	if err != nil {
+		return nil, fmt.Errorf("error finding position of message from index: %v", err)
+	}
+
+	var messages []*protocol.Message
+	bytesRead := 0
+	for bytesRead < int(maxBytes) {
+		lenBytes, err := p.ActiveSegment.read(int64(pos), 4)
+		if err != nil {
+			return nil, fmt.Errorf("error reading log for segment: %v", err)
+		}
+		if len(lenBytes) < 4 {
+			break
+		}
+
+		msgLen := binary.BigEndian.Uint32(lenBytes)
+
+		if bytesRead+int(msgLen) > int(maxBytes) {
+			break
+		}
+		msgBytes, err := p.ActiveSegment.read(int64(pos)+4, int(msgLen))
+		if err != nil {
+			return nil, fmt.Errorf("error reading log for segment: %v", err)
+		}
+
+		msg, err := protocol.Deserialize(msgBytes)
+		if err != nil {
+			return nil, err
+		}
+
+		messages = append(messages, msg)
+		bytesRead += 4 + int(msgLen)
+		pos += 4 + uint32(msgLen)
+	}
+	return messages, nil
+}
+
+func (p *LogPartition) GetTopic() string {
+	return p.Topic
+}
+
+func (p *LogPartition) GetLEO() uint64 {
+	return p.LEO
+}
+
+func (p *LogPartition) GetHWM() uint64 {
+	return p.HWM
 }
 
 func (p *LogPartition) rollSegment(baseOffset uint64) error {
