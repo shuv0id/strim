@@ -15,6 +15,9 @@ type Message struct {
 	Headers   map[string]string `json:"headers,omitempty"`
 }
 
+// Validate checks whether the Message has all required fields populated.
+// It returns an error if any mandatory field (Topic, Key, Value, or Timestamp)
+// is missing or invalid.
 func (m *Message) Validate() error {
 	if m.Topic == "" {
 		return fmt.Errorf("message topic cannot be empty")
@@ -38,8 +41,23 @@ func (m *Message) Validate() error {
 	return nil
 }
 
+// Serialize serializes a Message to BigEndian binary format.
+// The size is pre-calculated before serialization.
+// Serialized data layout:
+//
+//	offset + timestamp + topicLen + topic +
+//	keyLen + key + valueLen + value +
+//	headersCount + headers(keyLen + key + valueLen + value + ...)
 func (m *Message) Serialize() []byte {
-	buf := make([]byte, 0, 1024)
+	msgSize := 8 + 8 + 4 + len(m.Topic) + 4 + len(m.Key) + 4 + len(m.Value) + 4 // size(offset) + size(timestamps) + size(topicLen) + size(topic) + size(keyLen) + size(key) + size(valueLen) + size(value) + size(headersCount)
+
+	if len(m.Headers) != 0 {
+		for k, v := range m.Headers {
+			msgSize += 4 + len([]byte(k)) + 4 + len([]byte(v))
+		}
+	}
+
+	buf := make([]byte, 0, msgSize)
 
 	offsetBytes := make([]byte, 8)
 	binary.BigEndian.PutUint64(offsetBytes, m.Offset)
@@ -76,83 +94,86 @@ func (m *Message) Serialize() []byte {
 	return buf
 }
 
-func Deserialize(b []byte) (*Message, error) {
+// Deserialize decodes a serialized message body from msgBytes (big-endian encoded fields)
+// and returns a Message. Returns an error if msgBytes does not contain enough
+// data to fully decode the Message.
+func Deserialize(msgBytes []byte) (*Message, error) {
 	m := &Message{}
 	pos := 0
 
-	if len(b) < pos+8 {
+	if len(msgBytes) < pos+8 {
 		return nil, fmt.Errorf("not enough data for offset")
 	}
-	m.Offset = binary.BigEndian.Uint64(b[0:8])
+	m.Offset = binary.BigEndian.Uint64(msgBytes[pos:8])
 	pos += 8
 
-	if len(b) < pos+8 {
+	if len(msgBytes) < pos+8 {
 		return nil, fmt.Errorf("not enough data for timestamp")
 	}
-	m.Timestamp = time.UnixMilli(int64(binary.BigEndian.Uint64(b[pos : pos+8])))
+	m.Timestamp = time.UnixMilli(int64(binary.BigEndian.Uint64(msgBytes[pos : pos+8])))
 	pos += 8
 
-	if len(b) < pos+4 {
+	if len(msgBytes) < pos+4 {
 		return nil, fmt.Errorf("not enough data for topic length")
 	}
-	topicLen := binary.BigEndian.Uint32(b[pos : pos+4])
+	topicLen := binary.BigEndian.Uint32(msgBytes[pos : pos+4])
 	pos += 4
-	if len(b) < pos+int(topicLen) {
+	if len(msgBytes) < pos+int(topicLen) {
 		return nil, fmt.Errorf("not enough data for topic")
 	}
-	m.Topic = string(b[pos : pos+int(topicLen)])
+	m.Topic = string(msgBytes[pos : pos+int(topicLen)])
 	pos += int(topicLen)
 
-	if len(b) < pos+4 {
+	if len(msgBytes) < pos+4 {
 		return nil, fmt.Errorf("not enough data for key length")
 	}
-	keyLen := binary.BigEndian.Uint32(b[pos : pos+4])
+	keyLen := binary.BigEndian.Uint32(msgBytes[pos : pos+4])
 	pos += 4
-	if len(b) < pos+int(keyLen) {
-		return nil, fmt.Errorf("not enough data for key length")
+	if len(msgBytes) < pos+int(keyLen) {
+		return nil, fmt.Errorf("not enough data for key")
 	}
-	m.Key = b[pos : pos+int(keyLen)]
+	m.Key = msgBytes[pos : pos+int(keyLen)]
 	pos += int(keyLen)
 
-	if len(b) < pos+4 {
+	if len(msgBytes) < pos+4 {
 		return nil, fmt.Errorf("not enough data for value length")
 	}
-	valLen := binary.BigEndian.Uint32(b[pos : pos+4])
+	valLen := binary.BigEndian.Uint32(msgBytes[pos : pos+4])
 	pos += 4
-	if len(b) < pos+int(valLen) {
-		return nil, fmt.Errorf("not enough data for key length")
+	if len(msgBytes) < pos+int(valLen) {
+		return nil, fmt.Errorf("not enough data for value")
 	}
-	m.Value = b[pos : pos+int(valLen)]
+	m.Value = msgBytes[pos : pos+int(valLen)]
 	pos += int(valLen)
 
-	if len(b) < pos+4 {
+	if len(msgBytes) < pos+4 {
 		return nil, fmt.Errorf("not enough data for headers count")
 	}
-	headersCount := binary.BigEndian.Uint32(b[pos : pos+4])
+	headersCount := binary.BigEndian.Uint32(msgBytes[pos : pos+4])
 	pos += 4
 	m.Headers = make(map[string]string)
 
 	for i := 0; i < int(headersCount); i++ {
-		if len(b) < pos+4 {
+		if len(msgBytes) < pos+4 {
 			return nil, fmt.Errorf("not enough data for header key length")
 		}
-		kLen := binary.BigEndian.Uint32(b[pos : pos+4])
+		kLen := binary.BigEndian.Uint32(msgBytes[pos : pos+4])
 		pos += 4
-		if len(b) < pos+int(kLen) {
+		if len(msgBytes) < pos+int(kLen) {
 			return nil, fmt.Errorf("not enough data for header key")
 		}
-		key := string(b[pos : pos+int(kLen)])
+		key := string(msgBytes[pos : pos+int(kLen)])
 		pos += int(kLen)
 
-		if len(b) < pos+4 {
+		if len(msgBytes) < pos+4 {
 			return nil, fmt.Errorf("not enough data for header value length")
 		}
-		vLen := binary.BigEndian.Uint32(b[pos : pos+4])
+		vLen := binary.BigEndian.Uint32(msgBytes[pos : pos+4])
 		pos += 4
-		if len(b) < pos+int(vLen) {
+		if len(msgBytes) < pos+int(vLen) {
 			return nil, fmt.Errorf("not enough data for header value")
 		}
-		val := string(b[pos : pos+int(vLen)])
+		val := string(msgBytes[pos : pos+int(vLen)])
 		pos += int(vLen)
 
 		m.Headers[key] = val
