@@ -119,6 +119,26 @@ func (s *Segment) appendTimeIndexEntry(t time.Time, relativeOffset uint32) error
 	}
 	return nil
 }
+
+func (s *Segment) findPositionInIndex(offset uint64) (uint32, error) {
+	buf := make([]byte, 8)
+	for i := 0; ; i += 8 {
+		n, err := s.index.ReadAt(buf, int64(i))
+		if err != nil && err != io.EOF {
+			return 0, fmt.Errorf("error reading index file at offset %d: %v", i, err)
+		}
+		if n == 0 || n < 8 {
+			return 0, fmt.Errorf("index not found for the message offset %d", i)
+		}
+
+		relativeOffset := uint64(binary.BigEndian.Uint32(buf[0:4]))
+		if offset == s.baseOffset+relativeOffset {
+			pos := binary.BigEndian.Uint32(buf[4:8])
+			return pos, nil
+		}
+	}
+}
+
 func (s *Segment) Close() error {
 	if err := s.log.Close(); err != nil {
 		return fmt.Errorf("error closing log file for segment: %s-%d-%d: %v", s.topic, s.partition, s.baseOffset, err)
