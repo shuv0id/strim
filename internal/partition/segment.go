@@ -3,6 +3,7 @@ package partition
 import (
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -74,7 +75,7 @@ func (s *Segment) TimeIndexSize() (int64, error) {
 	return fileInfo.Size(), nil
 }
 
-func (s *Segment) writeMsg(msgBytes []byte) error {
+func (s *Segment) write(msgBytes []byte) error {
 	if !s.active {
 		return fmt.Errorf("segment not active: %s-%d-%d", s.topic, s.partition, s.baseOffset)
 	}
@@ -84,6 +85,15 @@ func (s *Segment) writeMsg(msgBytes []byte) error {
 		return fmt.Errorf("error writing to segment: %s-%d-%d: %v", s.topic, s.partition, s.baseOffset, err)
 	}
 	return nil
+}
+
+func (s *Segment) read(pos int64, size int) ([]byte, error) {
+	buf := make([]byte, size)
+	_, err := s.log.ReadAt(buf, pos)
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+	return buf, nil
 }
 
 func (s *Segment) appendIndexEntry(offset uint64, pos uint32) error {
