@@ -89,11 +89,11 @@ func (s *Segment) write(msgBytes []byte) error {
 
 func (s *Segment) read(pos int64, size int) ([]byte, error) {
 	buf := make([]byte, size)
-	_, err := s.log.ReadAt(buf, pos)
+	n, err := s.log.ReadAt(buf, pos)
 	if err != nil && err != io.EOF {
 		return nil, err
 	}
-	return buf, nil
+	return buf[:n], nil
 }
 
 func (s *Segment) appendIndexEntry(offset uint64, pos uint32) error {
