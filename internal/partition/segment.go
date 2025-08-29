@@ -139,6 +139,10 @@ func (s *Segment) findPositionInIndex(offset uint64) (uint32, error) {
 	}
 }
 
+func (s *Segment) markInactive() {
+	s.active = false
+}
+
 func (s *Segment) Close() error {
 	if err := s.log.Close(); err != nil {
 		return fmt.Errorf("error closing log file for segment: %s-%d-%d: %v", s.topic, s.partition, s.baseOffset, err)
