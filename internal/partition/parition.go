@@ -4,8 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strconv"
 	"sync"
 
 	"github.com/shuv0id/strim/internal/config"
@@ -26,20 +24,23 @@ type LogPartition struct {
 	LEO           uint64 // log-end-offset: The offset of the next message to be written in a partition.
 	HWM           uint64 // High Watermark: the highest offset that is safely replicated to all replicas.(leader only; followers will default to 0)
 	ActiveSegment *Segment
+	Segments      []*Segment // map for storing baseOffset of each segment to its the Segment itself of quick lookups
 	Config        *config.LogConfig
 	mu            sync.RWMutex
 }
 
-func NewPartition(id uint64, topic string) (Partition, error) {
-	dir := filepath.Join(topic, "-", strconv.FormatUint(id, 10))
-	if err := os.Mkdir(dir, 0755); err != nil {
+func NewPartition(id uint64, topic string, cfg *config.LogConfig) (Partition, error) {
+	dirName := fmt.Sprintf("%s-%d", topic, id)
+	if err := os.Mkdir(dirName, 0755); err != nil {
 		return nil, err
 	}
 
-	s, err := NewSegment(dir, 0, topic, id)
+	s, err := NewSegment(dirName, 0, topic, id)
 	if err != nil {
 		return nil, err
 	}
+	var segments []*Segment
+	segments = append(segments, s)
 
 	return &LogPartition{
 		ID:            id,
@@ -47,6 +48,8 @@ func NewPartition(id uint64, topic string) (Partition, error) {
 		LEO:           0,
 		HWM:           0,
 		ActiveSegment: s,
+		Segments:      segments,
+		Config:        cfg,
 	}, nil
 }
 
@@ -81,12 +84,16 @@ func (p *LogPartition) Append(msgs []*protocol.Message) error {
 			return err
 		}
 
-		if err = seg.write(msgData); err != nil {
+		payload := make([]byte, 4+msgSize)
+		binary.BigEndian.PutUint32(payload[:4], uint32(msgSize))
+		copy(payload[4:], msgData)
+
+		if err = seg.write(payload); err != nil {
 			return err
 		}
 		p.LEO++
 
-		endPos := startPos + msgSize
+		endPos := startPos + int64(len(payload))
 
 		bytesSinceLastIndex := endPos - seg.lastIndexedPos
 		if bytesSinceLastIndex >= p.Config.IndexIntervalBytes {
@@ -108,7 +115,15 @@ func (p *LogPartition) Append(msgs []*protocol.Message) error {
 }
 
 func (p *LogPartition) Read(offset uint64, maxBytes uint64) ([]*protocol.Message, error) {
-	pos, err := p.ActiveSegment.findPositionInIndex(offset)
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	seg, err := p.findSegmentForOffset(offset)
+	if err != nil {
+		return nil, err
+	}
+
+	pos, err := seg.findPositionInIndex(offset)
 	if err != nil {
 		return nil, fmt.Errorf("error finding position of message from index: %v", err)
 	}
@@ -116,7 +131,7 @@ func (p *LogPartition) Read(offset uint64, maxBytes uint64) ([]*protocol.Message
 	var messages []*protocol.Message
 	bytesRead := 0
 	for bytesRead < int(maxBytes) {
-		lenBytes, err := p.ActiveSegment.read(int64(pos), 4)
+		lenBytes, err := seg.read(int64(pos), 4)
 		if err != nil {
 			return nil, fmt.Errorf("error reading log for segment: %v", err)
 		}
@@ -129,7 +144,7 @@ func (p *LogPartition) Read(offset uint64, maxBytes uint64) ([]*protocol.Message
 		if bytesRead+int(msgLen) > int(maxBytes) {
 			break
 		}
-		msgBytes, err := p.ActiveSegment.read(int64(pos)+4, int(msgLen))
+		msgBytes, err := seg.read(int64(pos)+4, int(msgLen))
 		if err != nil {
 			return nil, fmt.Errorf("error reading log for segment: %v", err)
 		}
@@ -158,13 +173,44 @@ func (p *LogPartition) GetHWM() uint64 {
 	return p.HWM
 }
 
+func (p *LogPartition) findSegmentForOffset(offset uint64) (*Segment, error) {
+	start := 0
+	end := len(p.Segments) - 1
+
+	if offset < p.Segments[start].baseOffset || offset > p.Segments[end].baseOffset {
+		return nil, fmt.Errorf("segment not found for the offset %d", offset)
+	}
+
+	for start <= end {
+		mid := start + (end-start)/2
+		seg := p.Segments[mid]
+
+		if offset >= seg.baseOffset && (mid == len(p.Segments)-1 || offset < p.Segments[mid+1].baseOffset) {
+			return seg, nil
+		}
+		if offset < seg.baseOffset {
+			end = mid - 1
+		} else {
+			start = mid + 1
+		}
+	}
+
+	return nil, fmt.Errorf("segment not found for the offset %d", offset)
+}
+
 func (p *LogPartition) rollSegment(baseOffset uint64) error {
-	partitionDir := filepath.Join(p.Topic, "-", strconv.FormatUint(p.ID, 10))
+	partitionDir := fmt.Sprintf("%s-%d", p.Topic, p.ID)
 	newSeg, err := NewSegment(partitionDir, baseOffset, p.Topic, p.ID)
 	if err != nil {
 		return err
 	}
+
+	if err = p.makeSegmentInactive(p.ActiveSegment); err != nil {
+		return fmt.Errorf("error making current segment inactive when rolling: %v", err)
+	}
+
 	p.ActiveSegment = newSeg
+	p.Segments = append(p.Segments, newSeg)
 	return nil
 }
 
@@ -194,4 +240,20 @@ func (p *LogPartition) shouldRollSegment(msgSize int64) (bool, string, error) {
 	}
 
 	return false, "", nil
+}
+
+func (p *LogPartition) makeSegmentInactive(seg *Segment) error {
+	if err := seg.log.Sync(); err != nil {
+		return fmt.Errorf("failed to sync log: %w", err)
+	}
+	if err := seg.index.Sync(); err != nil {
+		return fmt.Errorf("failed to sync index: %w", err)
+	}
+	if err := seg.timeIndex.Sync(); err != nil {
+		return fmt.Errorf("failed to sync time index: %w", err)
+	}
+
+	seg.markInactive()
+
+	return nil
 }
