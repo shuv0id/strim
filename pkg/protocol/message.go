@@ -15,6 +15,18 @@ type Message struct {
 	Headers   map[string]string `json:"headers,omitempty"`
 }
 
+func (m *Message) String() string {
+	return fmt.Sprintf(
+		"Message{Offset=%d, Timestamp=%s, Topic=%q, Key=%q, Value=%q, Headers=%v}",
+		m.Offset,
+		m.Timestamp,
+		m.Topic,
+		string(m.Key),
+		string(m.Value),
+		m.Headers,
+	)
+}
+
 // Validate checks whether the Message has all required fields populated.
 // It returns an error if any mandatory field (Topic, Key, Value, or Timestamp)
 // is missing or invalid.
