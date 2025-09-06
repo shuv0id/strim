@@ -3,12 +3,11 @@ package protocol
 import (
 	"encoding/binary"
 	"fmt"
-	"time"
 )
 
 type Message struct {
 	Offset    uint64            `json:"offset"`
-	Timestamp time.Time         `json:"timestamp"`
+	Timestamp int64             `json:"timestamp"` // Unix millis since epoch
 	Topic     string            `json:"topic"`
 	Key       []byte            `json:"key,omitempty"`
 	Value     []byte            `json:"Value,omitempty"`
@@ -17,7 +16,7 @@ type Message struct {
 
 func (m *Message) String() string {
 	return fmt.Sprintf(
-		"Message{Offset=%d, Timestamp=%s, Topic=%q, Key=%q, Value=%q, Headers=%v}",
+		"Message{Offset=%d, Timestamp=%d, Topic=%q, Key=%q, Value=%q, Headers=%v}",
 		m.Offset,
 		m.Timestamp,
 		m.Topic,
@@ -43,7 +42,7 @@ func (m *Message) Validate() error {
 		return fmt.Errorf("message value cannot be empty")
 	}
 
-	if m.Timestamp.IsZero() {
+	if m.Timestamp <= 0 {
 		return fmt.Errorf("message timestamps is invalid")
 	}
 
@@ -76,7 +75,7 @@ func (m *Message) Serialize() []byte {
 	buf = append(buf, offsetBytes...)
 
 	timestampBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(timestampBytes, uint64(m.Timestamp.UnixMilli()))
+	binary.BigEndian.PutUint64(timestampBytes, uint64(m.Timestamp))
 	buf = append(buf, timestampBytes...)
 
 	buf = appendStrLengthPrefixed(buf, []byte(m.Topic))
@@ -122,7 +121,7 @@ func Deserialize(msgBytes []byte) (*Message, error) {
 	if len(msgBytes) < pos+8 {
 		return nil, fmt.Errorf("not enough data for timestamp")
 	}
-	m.Timestamp = time.UnixMilli(int64(binary.BigEndian.Uint64(msgBytes[pos : pos+8])))
+	m.Timestamp = int64(binary.BigEndian.Uint64(msgBytes[pos : pos+8]))
 	pos += 8
 
 	if len(msgBytes) < pos+4 {

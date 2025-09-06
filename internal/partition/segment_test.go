@@ -183,12 +183,12 @@ func TestSegment_AppendTimeIndexEntry(t *testing.T) {
 
 	testcases := []struct {
 		name           string
-		time           time.Time
+		time           int64
 		relativeOffset uint32
 	}{
 		{
 			name:           "append valid timeindex entry",
-			time:           time.Now(),
+			time:           time.Now().UnixMilli(),
 			relativeOffset: 69,
 		},
 	}
@@ -211,7 +211,7 @@ func TestSegment_AppendTimeIndexEntry(t *testing.T) {
 		_, err = s.timeIndex.Read(buf)
 		require.NoError(t, err)
 
-		expectedTimestamps := uint64(tc.time.UnixMilli())
+		expectedTimestamps := uint64(tc.time)
 		actualTimestamps := binary.BigEndian.Uint64(buf[0:8])
 		assert.Equal(t, expectedTimestamps, actualTimestamps)
 
@@ -232,7 +232,7 @@ func TestSegment_markInactive(t *testing.T) {
 	require.NoError(t, err)
 	err = segment.appendIndexEntry(5, 0)
 	require.NoError(t, err)
-	err = segment.appendTimeIndexEntry(time.Now(), 0)
+	err = segment.appendTimeIndexEntry(time.Now().UnixMilli(), 0)
 	require.NoError(t, err)
 
 	segment.markInactive()

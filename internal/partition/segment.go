@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 )
 
 type Segment struct {
@@ -108,9 +107,9 @@ func (s *Segment) appendIndexEntry(offset uint64, pos uint32) error {
 	return nil
 }
 
-func (s *Segment) appendTimeIndexEntry(t time.Time, relativeOffset uint32) error {
+func (s *Segment) appendTimeIndexEntry(t int64, relativeOffset uint32) error {
 	buf := make([]byte, 12)
-	binary.BigEndian.PutUint64(buf[0:8], uint64(t.UnixMilli()))
+	binary.BigEndian.PutUint64(buf[0:8], uint64(t))
 	binary.BigEndian.PutUint32(buf[8:12], relativeOffset)
 
 	_, err := s.timeIndex.Write(buf)
