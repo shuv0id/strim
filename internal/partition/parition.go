@@ -7,12 +7,11 @@ import (
 	"sync"
 
 	"github.com/shuv0id/strim/internal/config"
-	"github.com/shuv0id/strim/pkg/protocol"
 )
 
 type Partition interface {
-	Append(msgs []*protocol.Message) error
-	Read(offset uint64, maxBytes uint64) ([]*protocol.Message, error)
+	Append(msgs []*Message) error
+	Read(offset uint64, maxBytes uint64) ([]*Message, error)
 	GetTopic() string
 	GetLEO() uint64
 	GetHWM() uint64
@@ -53,7 +52,7 @@ func NewPartition(id uint64, topic string, cfg *config.LogConfig) (Partition, er
 	}, nil
 }
 
-func (p *LogPartition) Append(msgs []*protocol.Message) error {
+func (p *LogPartition) Append(msgs []*Message) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -114,7 +113,7 @@ func (p *LogPartition) Append(msgs []*protocol.Message) error {
 	return nil
 }
 
-func (p *LogPartition) Read(offset uint64, maxBytes uint64) ([]*protocol.Message, error) {
+func (p *LogPartition) Read(offset uint64, maxBytes uint64) ([]*Message, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
@@ -128,7 +127,7 @@ func (p *LogPartition) Read(offset uint64, maxBytes uint64) ([]*protocol.Message
 		return nil, fmt.Errorf("error finding position of message from index: %v", err)
 	}
 
-	var messages []*protocol.Message
+	var messages []*Message
 	bytesRead := 0
 	for bytesRead < int(maxBytes) {
 		lenBytes, err := seg.read(int64(pos), 4)
@@ -149,7 +148,7 @@ func (p *LogPartition) Read(offset uint64, maxBytes uint64) ([]*protocol.Message
 			return nil, fmt.Errorf("error reading log for segment: %v", err)
 		}
 
-		msg, err := protocol.Deserialize(msgBytes)
+		msg, err := Deserialize(msgBytes)
 		if err != nil {
 			return nil, err
 		}

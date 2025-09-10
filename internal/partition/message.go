@@ -1,4 +1,4 @@
-package protocol
+package partition
 
 import (
 	"encoding/binary"
@@ -6,12 +6,12 @@ import (
 )
 
 type Message struct {
-	Offset    uint64            `json:"offset"`
-	Timestamp int64             `json:"timestamp"` // Unix millis since epoch
-	Topic     string            `json:"topic"`
-	Key       []byte            `json:"key,omitempty"`
-	Value     []byte            `json:"Value,omitempty"`
-	Headers   map[string]string `json:"headers,omitempty"`
+	Offset    uint64
+	Timestamp int64 // Unix millis since epoch
+	Topic     string
+	Key       []byte
+	Value     []byte
+	Headers   map[string]string
 }
 
 func (m *Message) String() string {
