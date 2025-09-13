@@ -59,100 +59,114 @@ func DeserializeResponseHeader(data []byte) (*ResponseHeader, error) {
 	}, nil
 }
 
-func (req *ProduceRequest) Serialize() ([]byte, error) {
-	buf := &bytes.Buffer{}
-	var err error
-
-	err = binary.Write(buf, binary.BigEndian, uint32(len(req.Topic)))
+func (pd *PartitionData) serialize(buf *bytes.Buffer) error {
+	err := binary.Write(buf, binary.BigEndian, pd.Partition)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	_, err = buf.Write([]byte(req.Topic))
+	err = binary.Write(buf, binary.BigEndian, uint32(len(pd.Messages)))
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	err = binary.Write(buf, binary.BigEndian, req.Partition)
-	if err != nil {
-		return nil, err
-	}
-
-	err = binary.Write(buf, binary.BigEndian, uint32(len(req.Messages)))
-	if err != nil {
-		return nil, err
-	}
-
-	for _, msg := range req.Messages {
+	for _, msg := range pd.Messages {
 		err = binary.Write(buf, binary.BigEndian, uint32(len(msg.Key)))
 		if err != nil {
-			return nil, err
+			return err
 		}
 		_, err = buf.Write([]byte(msg.Key))
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		err = binary.Write(buf, binary.BigEndian, uint32(len(msg.Value)))
 		if err != nil {
-			return nil, err
+			return err
 		}
 		_, err = buf.Write([]byte(msg.Value))
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		err = binary.Write(buf, binary.BigEndian, msg.Timestamp)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		err = binary.Write(buf, binary.BigEndian, uint32(len(msg.Headers)))
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		if len(msg.Headers) != 0 {
 			for k, v := range msg.Headers {
 				err = binary.Write(buf, binary.BigEndian, uint32(len(k)))
 				if err != nil {
-					return nil, err
+					return err
 				}
 				_, err = buf.Write([]byte(k))
 				if err != nil {
-					return nil, err
+					return err
 				}
 
 				err = binary.Write(buf, binary.BigEndian, uint32(len(v)))
 				if err != nil {
-					return nil, err
+					return err
 				}
 				_, err = buf.Write([]byte(v))
 				if err != nil {
-					return nil, err
+					return err
 				}
 
 			}
 		}
+	}
+	return nil
+}
 
+func (td *TopicData) serialize(buf *bytes.Buffer) error {
+	err := binary.Write(buf, binary.BigEndian, uint32(len(td.Topic)))
+	if err != nil {
+		return err
+	}
+	_, err = buf.Write([]byte(td.Topic))
+	if err != nil {
+		return err
+	}
+
+	err = binary.Write(buf, binary.BigEndian, uint32(len(td.Partitions)))
+	if err != nil {
+		return err
+	}
+	for _, p := range td.Partitions {
+		if err := p.serialize(buf); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (req *ProduceRequest) Serialize() ([]byte, error) {
+	buf := &bytes.Buffer{}
+	var err error
+
+	err = binary.Write(buf, binary.BigEndian, uint32(len(req.Topics)))
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range req.Topics {
+		if err := t.serialize(buf); err != nil {
+			return nil, err
+		}
 	}
 
 	return buf.Bytes(), nil
 }
 
-func DeserializeProduceRequest(data []byte) (*ProduceRequest, error) {
-	reader := bytes.NewReader(data)
+func deserializePartitionData(reader *bytes.Reader) (*PartitionData, error) {
 	var err error
-
-	var topicLen uint32
-	if err = binary.Read(reader, binary.BigEndian, &topicLen); err != nil {
-		return nil, err
-	}
-
-	topic := make([]byte, topicLen)
-	if _, err = reader.Read(topic); err != nil {
-		return nil, err
-	}
 
 	var partition uint32
 	if err = binary.Read(reader, binary.BigEndian, &partition); err != nil {
@@ -225,50 +239,13 @@ func DeserializeProduceRequest(data []byte) (*ProduceRequest, error) {
 		msgs = append(msgs, msg)
 	}
 
-	return &ProduceRequest{
-		Topic:     string(topic),
+	return &PartitionData{
 		Partition: partition,
 		Messages:  msgs,
 	}, nil
 }
 
-func (response *ProduceResponse) Serialize() ([]byte, error) {
-	buf := &bytes.Buffer{}
-	var err error
-
-	err = binary.Write(buf, binary.BigEndian, uint32(len(response.Topic)))
-	if err != nil {
-		return nil, err
-	}
-	_, err = buf.Write([]byte(response.Topic))
-	if err != nil {
-		return nil, err
-	}
-
-	err = binary.Write(buf, binary.BigEndian, response.Partition)
-	if err != nil {
-		return nil, err
-	}
-
-	err = binary.Write(buf, binary.BigEndian, response.Offset)
-	if err != nil {
-		return nil, err
-	}
-
-	err = binary.Write(buf, binary.BigEndian, uint32(len(response.Error)))
-	if err != nil {
-		return nil, err
-	}
-	_, err = buf.Write([]byte(response.Error))
-	if err != nil {
-		return nil, err
-	}
-
-	return buf.Bytes(), nil
-}
-
-func DeserializeProduceResponse(data []byte) (*ProduceResponse, error) {
-	reader := bytes.NewReader(data)
+func deserializeTopicData(reader *bytes.Reader) (*TopicData, error) {
 	var err error
 
 	var topicLen uint32
@@ -280,33 +257,234 @@ func DeserializeProduceResponse(data []byte) (*ProduceResponse, error) {
 		return nil, err
 	}
 
-	var partition uint32
-	if err = binary.Read(reader, binary.BigEndian, &partition); err != nil {
+	var partitionCount uint32
+	if err = binary.Read(reader, binary.BigEndian, &partitionCount); err != nil {
 		return nil, err
 	}
 
-	var offset uint64
-	if err = binary.Read(reader, binary.BigEndian, &offset); err != nil {
+	var partitions []*PartitionData
+	for range partitionCount {
+		partionData, err := deserializePartitionData(reader)
+		if err != nil {
+			return nil, err
+		}
+		partitions = append(partitions, partionData)
+	}
+	return &TopicData{
+		Topic:      string(topic),
+		Partitions: partitions,
+	}, nil
+}
+
+func DeserializeProduceRequest(data []byte) (*ProduceRequest, error) {
+	reader := bytes.NewReader(data)
+
+	var topicCount uint32
+	if err := binary.Read(reader, binary.BigEndian, &topicCount); err != nil {
 		return nil, err
 	}
 
-	var errLen uint32
-	if err = binary.Read(reader, binary.BigEndian, &errLen); err != nil {
-		return nil, err
+	var topics []*TopicData
+	for range topicCount {
+		topic, err := deserializeTopicData(reader)
+		if err != nil {
+			return nil, err
+		}
+		topics = append(topics, topic)
 	}
 
-	var errorMsg []byte
-	if errLen > 0 {
-		errorMsg = make([]byte, errLen)
-		if _, err = reader.Read(errorMsg); err != nil {
+	return &ProduceRequest{
+		Topics: topics,
+	}, nil
+}
+
+func (msgErr *MessageError) serialize(buf *bytes.Buffer) error {
+	err := binary.Write(buf, binary.BigEndian, msgErr.BatchIndex)
+	if err != nil {
+		return err
+	}
+
+	err = binary.Write(buf, binary.BigEndian, uint32(len(msgErr.ErrorMsg)))
+	if err != nil {
+		return err
+	}
+
+	buf.Write([]byte(msgErr.ErrorMsg))
+
+	return nil
+}
+
+func (pr *PartitionResponse) serialize(buf *bytes.Buffer) error {
+	err := binary.Write(buf, binary.BigEndian, pr.Index)
+	if err != nil {
+		return err
+	}
+
+	err = binary.Write(buf, binary.BigEndian, pr.BaseOffset)
+	if err != nil {
+		return err
+	}
+
+	err = binary.Write(buf, binary.BigEndian, uint32(len(pr.Errors)))
+	if err != nil {
+		return err
+	}
+	for _, err := range pr.Errors {
+		if err := err.serialize(buf); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (tr *TopicResponse) serialize(buf *bytes.Buffer) error {
+	err := binary.Write(buf, binary.BigEndian, uint32(len(tr.Topic)))
+	if err != nil {
+		return err
+	}
+
+	_, err = buf.Write([]byte(tr.Topic))
+	if err != nil {
+		return err
+	}
+
+	err = binary.Write(buf, binary.BigEndian, uint32(len(tr.Partitions)))
+	if err != nil {
+		return err
+	}
+	for _, p := range tr.Partitions {
+		if err := p.serialize(buf); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (resp *ProduceResponse) Serialize() ([]byte, error) {
+	buf := &bytes.Buffer{}
+	var err error
+
+	err = binary.Write(buf, binary.BigEndian, uint32(len(resp.Responses)))
+	if err != nil {
+		return nil, err
+	}
+	for _, resp := range resp.Responses {
+		if err := resp.serialize(buf); err != nil {
 			return nil, err
 		}
 	}
 
+	return buf.Bytes(), nil
+}
+
+func deserializeMessageError(reader *bytes.Reader) (*MessageError, error) {
+	var err error
+
+	var batchIndex uint32
+	if err = binary.Read(reader, binary.BigEndian, &batchIndex); err != nil {
+		return nil, err
+	}
+
+	var errMsgLen uint32
+	if err := binary.Read(reader, binary.BigEndian, &errMsgLen); err != nil {
+		return nil, err
+	}
+	errMsg := make([]byte, errMsgLen)
+	if _, err = reader.Read(errMsg); err != nil {
+		return nil, err
+	}
+
+	return &MessageError{
+		BatchIndex: batchIndex,
+		ErrorMsg:   string(errMsg),
+	}, nil
+}
+
+func deserializePartitionResponse(reader *bytes.Reader) (*PartitionResponse, error) {
+	var err error
+
+	var index uint32
+	if err = binary.Read(reader, binary.BigEndian, &index); err != nil {
+		return nil, err
+	}
+
+	var baseOffset uint64
+	if err := binary.Read(reader, binary.BigEndian, &baseOffset); err != nil {
+		return nil, err
+	}
+
+	var errorsCount uint32
+	if err := binary.Read(reader, binary.BigEndian, &errorsCount); err != nil {
+		return nil, err
+	}
+	var errs []*MessageError
+	for range errorsCount {
+		msgErr, err := deserializeMessageError(reader)
+		if err != nil {
+			return nil, err
+		}
+		errs = append(errs, msgErr)
+	}
+
+	return &PartitionResponse{
+		Index:      index,
+		BaseOffset: baseOffset,
+		Errors:     errs,
+	}, nil
+}
+
+func deserializeTopicResponse(reader *bytes.Reader) (*TopicResponse, error) {
+	var err error
+
+	var topicLen uint32
+	if err := binary.Read(reader, binary.BigEndian, &topicLen); err != nil {
+		return nil, err
+	}
+	topic := make([]byte, topicLen)
+	if _, err = reader.Read(topic); err != nil {
+		return nil, err
+	}
+
+	var partitionRespCount uint32
+	if err := binary.Read(reader, binary.BigEndian, &partitionRespCount); err != nil {
+		return nil, err
+	}
+	var partitions []*PartitionResponse
+	for range partitionRespCount {
+		partitionResp, err := deserializePartitionResponse(reader)
+		if err != nil {
+			return nil, err
+		}
+		partitions = append(partitions, partitionResp)
+	}
+
+	return &TopicResponse{
+		Topic:      string(topic),
+		Partitions: partitions,
+	}, nil
+}
+
+func DeserializeProduceResponse(data []byte) (*ProduceResponse, error) {
+	reader := bytes.NewReader(data)
+	var err error
+
+	var respCount uint32
+	if err = binary.Read(reader, binary.BigEndian, &respCount); err != nil {
+		return nil, err
+	}
+
+	var resps []*TopicResponse
+	for range respCount {
+		topicResp, err := deserializeTopicResponse(reader)
+		if err != nil {
+			return nil, err
+		}
+		resps = append(resps, topicResp)
+	}
+
 	return &ProduceResponse{
-		Topic:     string(topic),
-		Partition: partition,
-		Offset:    offset,
-		Error:     string(errorMsg),
+		Responses: resps,
 	}, nil
 }
