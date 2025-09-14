@@ -16,28 +16,28 @@ type Segment struct {
 	index          *os.File
 	timeIndex      *os.File
 	topic          string // TODO: duplicate data from Partition?
-	partition      uint64 // TODO: duplicate data from Partition?
+	partition      uint32 // TODO: duplicate data from Partition?
 	active         bool
 	lastIndexedPos int64
 }
 
-func NewSegment(partitionDir string, offset uint64, topic string, partition uint64) (*Segment, error) {
+func NewSegment(partitionDir string, offset uint64, topic string, partitionIndex uint32) (*Segment, error) {
 	logPath := filepath.Join(partitionDir, pad(offset)+".log")
 	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
 	if err != nil {
-		return nil, fmt.Errorf("error opening log file for segment %s-%d-%d: %v", topic, partition, offset, err)
+		return nil, fmt.Errorf("error opening log file for segment %s-%d-%d: %v", topic, partitionIndex, offset, err)
 	}
 
 	indexPath := filepath.Join(partitionDir, pad(offset)+".index")
 	indexFile, err := os.OpenFile(indexPath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
 	if err != nil {
-		return nil, fmt.Errorf("error opening index file for segment %s-%d-%d: %v", topic, partition, offset, err)
+		return nil, fmt.Errorf("error opening index file for segment %s-%d-%d: %v", topic, partitionIndex, offset, err)
 	}
 
 	timeindexPath := filepath.Join(partitionDir, pad(offset)+".timeindex")
 	timeindexFile, err := os.OpenFile(timeindexPath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
 	if err != nil {
-		return nil, fmt.Errorf("error opening timeindex file for segment %s-%d-%d: %v", topic, partition, offset, err)
+		return nil, fmt.Errorf("error opening timeindex file for segment %s-%d-%d: %v", topic, partitionIndex, offset, err)
 	}
 	return &Segment{
 		baseOffset: offset,
@@ -45,7 +45,7 @@ func NewSegment(partitionDir string, offset uint64, topic string, partition uint
 		index:      indexFile,
 		timeIndex:  timeindexFile,
 		topic:      topic,
-		partition:  partition,
+		partition:  partitionIndex,
 		active:     true,
 	}, nil
 }

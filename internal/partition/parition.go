@@ -9,16 +9,35 @@ import (
 	"github.com/shuv0id/strim/internal/config"
 )
 
+type BatchError struct {
+	batchIndex int
+	errorMsg   string
+}
+
+type BatchErrors struct {
+	BaseOffset int
+	Errors     []*BatchError
+}
+
+func (batchError *BatchError) Error() string {
+	return fmt.Sprintf("batch index:%d: %s", batchError.batchIndex, batchError.errorMsg)
+}
+
+func (be *BatchError) BatchIndex() int {
+	return be.batchIndex
+}
+
 type Partition interface {
-	Append(msgs []*Message) error
+	Append(msgs []*Message) *BatchErrors
 	Read(offset uint64, maxBytes uint64) ([]*Message, error)
+	GetPartitionIndex() uint32
 	GetTopic() string
 	GetLEO() uint64
 	GetHWM() uint64
 }
 
 type LogPartition struct {
-	ID            uint64 // ID with 0 will considered as leader, rest will be followers partition
+	Index         uint32 // ID with 0 will considered as leader, rest will be followers partition
 	Topic         string
 	LEO           uint64 // log-end-offset: The offset of the next message to be written in a partition.
 	HWM           uint64 // High Watermark: the highest offset that is safely replicated to all replicas.(leader only; followers will default to 0)
@@ -28,13 +47,13 @@ type LogPartition struct {
 	mu            sync.RWMutex
 }
 
-func NewPartition(id uint64, topic string, cfg *config.LogConfig) (Partition, error) {
-	dirName := fmt.Sprintf("%s-%d", topic, id)
+func NewPartition(index uint32, topic string, cfg *config.LogConfig) (Partition, error) {
+	dirName := fmt.Sprintf("%s-%d", topic, index)
 	if err := os.Mkdir(dirName, 0755); err != nil {
 		return nil, err
 	}
 
-	s, err := NewSegment(dirName, 0, topic, id)
+	s, err := NewSegment(dirName, 0, topic, index)
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +61,7 @@ func NewPartition(id uint64, topic string, cfg *config.LogConfig) (Partition, er
 	segments = append(segments, s)
 
 	return &LogPartition{
-		ID:            id,
+		Index:         index,
 		Topic:         topic,
 		LEO:           0,
 		HWM:           0,
@@ -52,65 +71,96 @@ func NewPartition(id uint64, topic string, cfg *config.LogConfig) (Partition, er
 	}, nil
 }
 
-func (p *LogPartition) Append(msgs []*Message) error {
+func (p *LogPartition) Append(msgs []*Message) *BatchErrors {
+	batchErrs := &BatchErrors{
+		Errors: make([]*BatchError, 0, len(msgs)),
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	seg := p.ActiveSegment
+	if len(msgs) == 0 {
+		batchError := &BatchError{
+			batchIndex: 0,
+			errorMsg:   "empty batch messages",
+		}
+		batchErrs.Errors = append(batchErrs.Errors, batchError)
+		return batchErrs
+	}
 
-	for _, m := range msgs {
+	activeSeg := p.ActiveSegment
+
+	for i, m := range msgs {
 		if err := m.Validate(); err != nil {
-			return err
+			batchErr := BatchError{
+				batchIndex: i,
+				errorMsg:   fmt.Sprintf("invalid message: %v", err),
+			}
+			batchErrs.Errors = append(batchErrs.Errors, &batchErr)
+			continue
 		}
 		if m.Offset != p.LEO {
-			return fmt.Errorf("incorrect message offset: expected: %d got: %d", p.LEO, m.Offset)
+			batchErr := BatchError{
+				batchIndex: i,
+				errorMsg:   fmt.Sprintf("incorrect message offset: expected: %d got: %d", p.LEO, m.Offset),
+			}
+			batchErrs.Errors = append(batchErrs.Errors, &batchErr)
+			continue
 		}
 
 		msgData := m.Serialize()
 		msgSize := int64(len(msgData))
 
 		if roll, _, err := p.shouldRollSegment(msgSize); err != nil {
-			return err
+			// NOTE: will be adding log here
+			// return err
 		} else if roll {
 			if err := p.rollSegment(m.Offset); err != nil {
-				return err
+				// NOTE: will be adding log here
+				// return err
 			}
-			seg = p.ActiveSegment
+			activeSeg = p.ActiveSegment
 		}
 
-		startPos, err := seg.Size()
+		startPos, err := activeSeg.Size()
 		if err != nil {
-			return err
+			// NOTE: will be adding log here
+			// return err
 		}
 
 		payload := make([]byte, 4+msgSize)
 		binary.BigEndian.PutUint32(payload[:4], uint32(msgSize))
 		copy(payload[4:], msgData)
 
-		if err = seg.write(payload); err != nil {
-			return err
+		if err = activeSeg.write(payload); err != nil {
+			// NOTE: will be adding log here
+			batchErr := BatchError{batchIndex: i, errorMsg: "internal server error"}
+			batchErrs.Errors = append(batchErrs.Errors, &batchErr)
+			continue
 		}
+		batchErrs.BaseOffset = int(m.Offset)
 		p.LEO++
 
 		endPos := startPos + int64(len(payload))
 
-		bytesSinceLastIndex := endPos - seg.lastIndexedPos
+		bytesSinceLastIndex := endPos - activeSeg.lastIndexedPos
 		if bytesSinceLastIndex >= p.Config.IndexIntervalBytes {
-			relativeOffset := m.Offset - seg.baseOffset
+			relativeOffset := m.Offset - activeSeg.baseOffset
 
-			err := seg.appendIndexEntry(relativeOffset, uint32(startPos))
+			err := activeSeg.appendIndexEntry(relativeOffset, uint32(startPos))
 			if err != nil {
-				return fmt.Errorf("error making index entry for message: %s-%d: %v", m.Topic, m.Offset, err)
+				// NOTE: will be adding log here
+				// return fmt.Errorf("error making index entry for message: %s-%d: %v", m.Topic, m.Offset, err)
 			}
-			err = seg.appendTimeIndexEntry(m.Timestamp, uint32(relativeOffset))
+			err = activeSeg.appendTimeIndexEntry(m.Timestamp, uint32(relativeOffset))
 			if err != nil {
-				return fmt.Errorf("error making timeindex entry for message: %s-%d: %v", m.Topic, m.Offset, err)
+				// NOTE: will be adding log here
+				// return fmt.Errorf("error making timeindex entry for message: %s-%d: %v", m.Topic, m.Offset, err)
 			}
 
-			seg.lastIndexedPos = endPos
+			activeSeg.lastIndexedPos = endPos
 		}
 	}
-	return nil
+	return batchErrs
 }
 
 func (p *LogPartition) Read(offset uint64, maxBytes uint64) ([]*Message, error) {
@@ -160,6 +210,10 @@ func (p *LogPartition) Read(offset uint64, maxBytes uint64) ([]*Message, error) 
 	return messages, nil
 }
 
+func (p *LogPartition) GetPartitionIndex() uint32 {
+	return p.Index
+}
+
 func (p *LogPartition) GetTopic() string {
 	return p.Topic
 }
@@ -198,8 +252,8 @@ func (p *LogPartition) findSegmentForOffset(offset uint64) (*Segment, error) {
 }
 
 func (p *LogPartition) rollSegment(baseOffset uint64) error {
-	partitionDir := fmt.Sprintf("%s-%d", p.Topic, p.ID)
-	newSeg, err := NewSegment(partitionDir, baseOffset, p.Topic, p.ID)
+	partitionDir := fmt.Sprintf("%s-%d", p.Topic, p.Index)
+	newSeg, err := NewSegment(partitionDir, baseOffset, p.Topic, p.Index)
 	if err != nil {
 		return err
 	}
