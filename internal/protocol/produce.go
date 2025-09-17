@@ -1,5 +1,7 @@
 package protocol
 
+const HeaderSize = 6 // size(MessageType) + size(CorrelationID)
+
 // Headers
 type RequestHeader struct {
 	MessageType   MsgType
