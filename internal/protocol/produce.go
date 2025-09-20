@@ -45,6 +45,7 @@ type PartitionResponse struct {
 	Index      uint32
 	BaseOffset uint64
 	Errors     []*MessageError
+	ErrorCode  int32 // -1 = no messages, 0 = success, >0 = error occured
 }
 
 type TopicResponse struct {
