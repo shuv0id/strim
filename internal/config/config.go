@@ -11,3 +11,7 @@ type LogConfig struct {
 	IndexIntervalBytes int64 `yaml:"index_interval_bytes"`
 	IndexMaxBytes      int64 `yaml:"index_max_bytes"`
 }
+
+type TopicConfig struct {
+	NumPartitions int64
+}
